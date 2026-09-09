@@ -1,0 +1,31 @@
+% Build from this directory (put temporary TeX files outside the site):
+% mkdir -p /tmp/blog-math-preview
+% latex -no-shell-escape -interaction=nonstopmode -halt-on-error -output-directory=/tmp/blog-math-preview prover_1.tex
+% dvisvgm --no-fonts --bbox=preview --page=1-4 --output=prover_1-%p.svg /tmp/blog-math-preview/prover_1.dvi
+% HTML image dimensions are the logged box dimensions divided by 10, in em.
+% Inline vertical-align is the negative logged depth divided by 10, in em.
+\documentclass[preview,multi=equationpreview,border=0pt]{standalone}
+\usepackage{amsmath}
+\newenvironment{equationpreview}{}{}
+\newsavebox{\mathbox}
+\newcommand{\rendermath}[2]{%
+  \begin{equationpreview}%
+  \sbox{\mathbox}{$#2$}%
+  \typeout{MATH #1: width=\the\wd\mathbox; height=\the\ht\mathbox; depth=\the\dp\mathbox}%
+  \usebox{\mathbox}%
+  \end{equationpreview}%
+}
+\begin{document}
+\rendermath{1}{(a+b)^2 = a^2 + 2ab + b^2}
+\rendermath{2}{\displaystyle
+  \begin{aligned}
+    (a+b)^2 &= a(a+b) + b(a+b) \\
+             &= a^2 + ab + ba + b^2 \\
+             &= a^2 + 2ab + b^2
+  \end{aligned}
+}
+\rendermath{3}{\displaystyle
+  \sum_{k=1}^n k^3 = \left( \frac{n (n+1)} 2 \right)^2.
+}
+\rendermath{4}{n(n+1)}
+\end{document}
