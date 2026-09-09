@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Building and evaluating a simple agent for proving mathematical results in Lean</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
   <main>
@@ -24,8 +24,8 @@
 <p>This post sets the baseline: I will explain the task, the base agent and discuss its performance.</p>
 <p>In some sense, mathematics is the study of (logically) verifiable problems. It therefore provides a vast number of verifiable tasks of arbitrary difficulty. Early LLMs struggled with grade-school mathematics: the 175B-parameter GPT-3 model struggled with grade-school mathematics problems (see <a href="https://arxiv.org/abs/2110.14168">GSM8K</a>). At the time of this writing, frontier models routinely solve open problems that stumped generations of mathematicians. See the <a href="https://terrytao.wordpress.com/2026/07/21/a-digestion-of-the-jacobian-conjecture-counterexample/">Jacobian conjecture counterexample</a> and the <a href="https://alpo.ge/s6.pdf">complex structure on S⁶ manuscript</a>. At the time of writing, some problems still remain beyond the frontier.</p>
 <p>Here, we deal not with the mathematical frontier, but instead with proofs in undergraduate mathematics and program verification. For most of these problems, even small open-weight models will readily give essentially correct solutions in one shot. But there is a catch: a proof written in natural language is hard to verify mechanically. This problem can be dealt with by using LLMs as judges, and it seems that many of the improvements in mathematical capability in recent years are attributable to this. There is, however, an alternative. Mathematical proofs can be formalized in a language that is machine-checkable. One of the most popular languages for this purpose is <a href="https://lean-lang.org/">Lean</a>.</p>
-<p>A proof of <img class="math-svg" src="math/prover_1-1.svg" alt="(a + b) squared equals a squared plus 2ab plus b squared" style="width: 10.496848em; height: 1.064003em; vertical-align: -0.250000em;"> that may satisfy a mathematician is</p>
-<p><span class="math-display"><img class="math-svg" src="math/prover_1-2.svg" alt="(a + b) squared = a(a + b) + b(a + b) = a squared + ab + ba + b squared = a squared + 2ab + b squared" style="width: 12.835149em; height: 4.472019em;"></span></p>
+<p>A proof of <img class="math-svg" src="math/prover_1-1.svg?v=2" alt="(a + b) squared equals a squared plus 2ab plus b squared" style="width: 10.316827em; height: 1.052248em; vertical-align: -0.196500em;"> that may satisfy a mathematician is</p>
+<div class="math-display"><img class="math-svg" src="math/prover_1-2.svg?v=2" alt="(a + b) squared = a(a + b) + b(a + b) = a squared + ab + ba + b squared = a squared + 2ab + b squared" style="width: 12.790253em; height: 4.597255em;"></div>
 <p>accompanied by mumbling the words associativity, distributivity and commutativity.</p>
 <p>In Lean, this would look like this:</p>
 <pre class="lean"><code>import Mathlib
@@ -44,7 +44,8 @@ example (a b : ℝ) : (a + b) * (a + b) = a * a + 2 * (a * b) + b * b :=
 <p>While strong models will now one-shot relatively easy problems in Lean, proving a theorem in Lean is also an ideal agentic coding task. Lean provides mechanisms for iteratively building up a proof, allowing the model to gradually fill in all the details. And conversely, it is easy to check if the submitted proof is correct: only then will it compile without errors and without using disallowed axioms.</p>
 <p>I implemented a deliberately simple version of such an agent (see <a href="https://github.com/lschiemanowski/formalizer">GitHub</a>). The core of the agent is about 1,500 lines of code (including the system prompt and tool descriptions) using Pydantic AI.</p>
 <p>The agent’s concrete task is to write a Lean file that contains the proof of a specific statement. For example, consider the following identity:</p>
-<p><span class="math-display"><img class="math-svg" src="math/prover_1-3.svg" alt="The sum of k cubed from k = 1 to n equals (n(n + 1) / 2) squared." style="width: 10.260951em; height: 2.956684em;"></span> In Lean, this proposition can be encoded as</p>
+<div class="math-display"><img class="math-svg" src="math/prover_1-3.svg?v=2" alt="The sum of k cubed from k = 1 to n equals (n(n + 1) / 2) squared." style="width: 9.126285em; height: 2.952690em;"></div>
+<p>In Lean, this proposition can be encoded as</p>
 <pre class="lean"><code>∀ (n : ℕ),
     (∑ k ∈ Finset.range (n + 1), k ^ 3) = ((n * (n + 1)) / 2) ^ 2</code></pre>
 <p>The agent’s task is then to write the contents of a file <code>Main.lean</code>, which contains a proof of this proposition. The proposition itself is contained in a file <code>FormalizerProblem.lean</code>:</p>
@@ -103,7 +104,7 @@ theorem solution : FormalizerProblem.Target := by
       exact cube_sum_step n
 
 end FormalizerSubmission</code></pre>
-<p>The proof is the standard induction proof you would expect. It is complicated by the fact that the statement is expressed in the natural numbers, where division discards the remainder. Verifying that <img class="math-svg" src="math/prover_1-4.svg" alt="n times (n + 1)" style="width: 3.700465em; height: 1.000000em; vertical-align: -0.250000em;"> is even ensures that division by two is exact, which allows the proof to carry out the algebra over the rational numbers.</p>
+<p>The proof is the standard induction proof you would expect. It is complicated by the fact that the statement is expressed in the natural numbers, where division discards the remainder. Verifying that <img class="math-svg" src="math/prover_1-4.svg?v=2" alt="n times (n + 1)" style="width: 3.422427em; height: 0.903998em; vertical-align: -0.196500em;"> is even ensures that division by two is exact, which allows the proof to carry out the algebra over the rational numbers.</p>
 <p>The agent has the following tools to do its work:</p>
 <ul>
 <li><code>lean_execute</code></li>
