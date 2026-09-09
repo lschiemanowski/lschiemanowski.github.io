@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Building and evaluating a simple agent for proving mathematical results in Lean</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <p><a href="../index.html">All posts</a></p>
+    <article>
+<h1>Building and evaluating a simple agent for proving mathematical results in Lean</h1>
+<p>In this series of blog posts, I want to explore how to build, evaluate and optimize an effective LLM-based agent for a verifiable task. There are two main optimization objectives that I address here: performance and cost.</p>
+<p>After setting a baseline, there are (at least) five axes where improvements can be made:</p>
+<ul>
+<li>model selection</li>
+<li>prompt design</li>
+<li>tool choice and tool design</li>
+<li>context management</li>
+<li>model training</li>
+</ul>
+<p>In this series, I will deal with each of these, perhaps with the exception of model training. (LLM training is expensive!)</p>
+<p>This post sets the baseline: I will explain the task, the base agent and discuss its performance.</p>
+<p>In some sense, mathematics is the study of (logically) verifiable problems. It therefore provides a vast number of verifiable tasks of arbitrary difficulty. Early LLMs struggled with grade-school mathematics: the 175B-parameter GPT-3 model struggled with grade-school mathematics problems (see <a href="https://arxiv.org/abs/2110.14168">GSM8K</a>). At the time of this writing, frontier models routinely solve open problems that stumped generations of mathematicians. See the <a href="https://terrytao.wordpress.com/2026/07/21/a-digestion-of-the-jacobian-conjecture-counterexample/">Jacobian conjecture counterexample</a> and the <a href="https://alpo.ge/s6.pdf">complex structure on S⁶ manuscript</a>. At the time of writing, some problems still remain beyond the frontier.</p>
+<p>Here, we deal not with the mathematical frontier, but instead with proofs in undergraduate mathematics and program verification. For most of these problems, even small open-weight models will readily give essentially correct solutions in one shot. But there is a catch: a proof written in natural language is hard to verify mechanically. This problem can be dealt with by using LLMs as judges, and it seems that many of the improvements in mathematical capability in recent years are attributable to this. There is, however, an alternative. Mathematical proofs can be formalized in a language that is machine-checkable. One of the most popular languages for this purpose is <a href="https://lean-lang.org/">Lean</a>.</p>
+<p>A proof of <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><mi>a</mi><mo>+</mo><mi>b</mi><msup><mo stretchy="false" form="postfix">)</mo><mn>2</mn></msup><mo>=</mo><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>a</mi><mi>b</mi><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">(a+b)^2 = a^2 + 2ab + b^2</annotation></semantics></math> that may satisfy a mathematician is</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mtable><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"><mo stretchy="false" form="prefix">(</mo><mi>a</mi><mo>+</mo><mi>b</mi><msup><mo stretchy="false" form="postfix">)</mo><mn>2</mn></msup></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><mi>a</mi><mo stretchy="false" form="prefix">(</mo><mi>a</mi><mo>+</mo><mi>b</mi><mo stretchy="false" form="postfix">)</mo><mo>+</mo><mi>b</mi><mo stretchy="false" form="prefix">(</mo><mi>a</mi><mo>+</mo><mi>b</mi><mo stretchy="false" form="postfix">)</mo></mtd></mtr><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><mi>a</mi><mi>b</mi><mo>+</mo><mi>b</mi><mi>a</mi><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup></mtd></mtr><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>a</mi><mi>b</mi><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup></mtd></mtr></mtable><annotation encoding="application/x-tex">
+\begin{aligned}
+(a+b)^2 &amp;= a(a+b) + b(a+b) \\
+         &amp;= a^2 + ab + ba + b^2 \\
+         &amp;= a^2 + 2ab + b^2
+\end{aligned}
+</annotation></semantics></math></p>
+<p>accompanied by mumbling the words associativity, distributivity and commutativity.</p>
+<p>In Lean, this would look like this:</p>
+<pre class="lean"><code>import Mathlib
+
+example (a b : ℝ) : (a + b) * (a + b) = a * a + 2 * (a * b) + b * b :=
+  calc
+    (a + b) * (a + b) = a * a + b * a + (a * b + b * b) := by
+      rw [mul_add, add_mul, add_mul]
+    _ = a * a + (b * a + a * b) + b * b := by
+      rw [← add_assoc, add_assoc (a * a)]
+    _ = a * a + 2 * (a * b) + b * b := by
+      rw [mul_comm b a, ← two_mul]</code></pre>
+<p>The details are not important, but note that details a human reader could easily infer need to be provided and justified. Formalization in Lean forces us to clarify many things that human mathematicians take for granted. Modern mathematical literature is addressed to domain experts and this means that a large number of routine arguments are omitted. For this reason, formalization of cutting-edge mathematics was extremely labor-intensive before AI assistance arrived and therefore rarely carried out in practice. One interesting exception is the <a href="https://leanprover-community.github.io/blog/posts/lte-final/">Liquid Tensor Experiment</a>.</p>
+<p>Mathematical proofs tend to depend on a lot of other mathematical results. Rederiving these mathematical results every time we want to prove something would clearly not be economical. Luckily, there is a large, community-maintained library of mathematical results and definitions for Lean: <a href="https://github.com/leanprover-community/mathlib4"><code>mathlib</code></a>. <code>mathlib</code> is constantly expanding in scope.</p>
+<p>LLMs used to be relatively bad at Lean long after they got good at programming in languages like Python. In my personal experience, this changed in summer/fall of 2025. At the time of writing, frontier models have become good enough to formalize their own mathematical breakthroughs. See the <a href="https://github.com/plby/HopfProblem">Lean formalization of the complex structure on S⁶</a>. But even very cheap models like Deepseek V4 Flash, GLM-5.3 Flash and GPT 5.6 Luna are surprisingly capable at these tasks, while small local models like Gemma 4 or Qwen 3.5/3.6/3.8 still struggle with these tasks, as we will see.</p>
+<p>While strong models will now one-shot relatively easy problems in Lean, proving a theorem in Lean is also an ideal agentic coding task. Lean provides mechanisms for iteratively building up a proof, allowing the model to gradually fill in all the details. And conversely, it is easy to check if the submitted proof is correct: only then will it compile without errors and without using disallowed axioms.</p>
+<p>I implemented a deliberately simple version of such an agent (see <a href="https://github.com/lschiemanowski/formalizer">GitHub</a>). The core of the agent is about 1,500 lines of code (including the system prompt and tool descriptions) using Pydantic AI.</p>
+<p>The agent’s concrete task is to write a Lean file that contains the proof of a specific statement. For example, consider the following identity:</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><msup><mi>k</mi><mn>3</mn></msup><mo>=</mo><msup><mrow><mo stretchy="true" form="prefix">(</mo><mfrac><mrow><mi>n</mi><mo stretchy="false" form="prefix">(</mo><mi>n</mi><mo>+</mo><mn>1</mn><mo stretchy="false" form="postfix">)</mo></mrow><mn>2</mn></mfrac><mo stretchy="true" form="postfix">)</mo></mrow><mn>2</mn></msup><mi>.</mi></mrow><annotation encoding="application/x-tex">
+\sum_{k=1}^n k^3 = \left( \frac{n (n+1)} 2 \right)^2.
+</annotation></semantics></math> In Lean, this proposition can be encoded as</p>
+<pre class="lean"><code>∀ (n : ℕ),
+    (∑ k ∈ Finset.range (n + 1), k ^ 3) = ((n * (n + 1)) / 2) ^ 2</code></pre>
+<p>The agent’s task is then to write the contents of a file <code>Main.lean</code>, which contains a proof of this proposition. The proposition itself is contained in a file <code>FormalizerProblem.lean</code>:</p>
+<pre class="lean"><code>import Mathlib
+
+namespace FormalizerProblem
+
+def Target : Prop :=
+  ∀ (n : ℕ),
+    (∑ k ∈ Finset.range (n + 1), k ^ 3) = ((n * (n + 1)) / 2) ^ 2
+
+end FormalizerProblem</code></pre>
+<p>Once the agent has produced its <code>Main.lean</code> file, the following file, <code>FormalizerCheck.lean</code>, is compiled:</p>
+<pre class="lean"><code>import FormalizerProblem
+import Main
+
+example : FormalizerProblem.Target :=
+  FormalizerSubmission.solution
+
+#print axioms FormalizerSubmission.solution</code></pre>
+<p>Therefore, <code>Main.lean</code> must define the proof as <code>FormalizerSubmission.solution</code>. The line</p>
+<pre class="lean"><code>#print axioms FormalizerSubmission.solution</code></pre>
+<p>is to verify that the proof doesn’t introduce axioms beyond an agreed set of axioms, which would be effectively cheating.</p>
+<p>Here is a verified submission of <code>Main.lean</code> produced by Deepseek V4 Flash:</p>
+<pre class="lean"><code>import FormalizerProblem
+
+namespace FormalizerSubmission
+
+lemma cube_sum_step (n : ℕ) :
+    ((n * (n + 1)) / 2) ^ 2 + (n + 1) ^ 3 =
+      (((n + 1) * (n + 2)) / 2) ^ 2 := by
+  have hdvd1 : 2 ∣ n * (n + 1) := by
+    exact (even_iff_two_dvd.mp (Nat.even_mul_succ_self n))
+  have hdvd2 : 2 ∣ (n + 1) * (n + 2) := by
+    exact (even_iff_two_dvd.mp (Nat.even_mul_succ_self (n + 1)))
+  have hdiv1 : (((n * (n + 1)) / 2 : ℕ) : ℚ) =
+      ((n : ℚ) * (n + 1)) / 2 := by
+    rw [Nat.cast_div hdvd1 (by norm_num : (2 : ℚ) ≠ 0)]
+    norm_num
+  have hdiv2 : ((((n + 1) * (n + 2)) / 2 : ℕ) : ℚ) =
+      ((n + 1 : ℚ) * (n + 2)) / 2 := by
+    rw [Nat.cast_div hdvd2 (by norm_num : (2 : ℚ) ≠ 0)]
+    norm_num
+  apply Nat.cast_injective (R := ℚ)
+  rw [Nat.cast_add, Nat.cast_pow, Nat.cast_pow, Nat.cast_pow, hdiv1, hdiv2]
+  norm_num
+  ring
+
+theorem solution : FormalizerProblem.Target := by
+  intro n
+  induction n with
+  | zero =&gt; simp
+  | succ n ih =&gt;
+      rw [Finset.sum_range_succ]
+      rw [ih]
+      exact cube_sum_step n
+
+end FormalizerSubmission</code></pre>
+<p>The proof is the standard induction proof you would expect. It is complicated by the fact that the statement is expressed in the natural numbers, where division discards the remainder. Verifying that <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>n</mi><mo stretchy="false" form="prefix">(</mo><mi>n</mi><mo>+</mo><mn>1</mn><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">n(n+1)</annotation></semantics></math> is even ensures that division by two is exact, which allows the proof to carry out the algebra over the rational numbers.</p>
+<p>The agent has the following tools to do its work:</p>
+<ul>
+<li><code>lean_execute</code></li>
+<li><code>final_submission</code></li>
+<li><code>mathlib_search</code></li>
+<li><code>save</code></li>
+</ul>
+<p><code>lean_execute</code> takes a string containing the contents of <code>Main.lean</code> and compiles <code>FormalizerCheck.lean</code> and returns the output of the Lean compiler. The agent sees the output of the compiler and can revise its proof. If <code>lean_execute</code> compiles without an issue, the agent knows that it has succeeded at producing a proof. It can then end its work by calling <code>final_submission</code>, which does the same thing as <code>lean_execute</code>, but ends the agent episode.</p>
+<p><code>mathlib_search</code> allows the agent to query <a href="https://loogle.lean-lang.org/">Loogle</a>, a search tool for Lean’s Mathlib.</p>
+<p><code>save</code> allows the agent to save additional Lean files, which can be imported by <code>Main.lean</code>. This is useful for working in a modular manner on problems that require a long solution.</p>
+<p>To provide a clean, well-specified working environment, <code>lean_execute</code> and <code>mathlib_search</code> are executed in a Docker environment that pins the Lean, Mathlib and Loogle versions.</p>
+<p>A typical, successful agent episode may look like this: after receiving the system prompt and the task, the model searches for relevant theorems to apply. Once it thinks it can construct a proof, it constructs a proof attempt and sends it to <code>lean_execute</code>. If this fails, it will receive the compiler errors and warnings. It will then iterate until it succeeds. Once it has found a proof, it submits it.</p>
+<p>The model purposely doesn’t have a clean way to fail. It therefore can fail by running into limits placed on the agent (such as limits on the number of turns or the number of tokens), or by sending a final submission, which doesn’t really solve the problem.</p>
+<p>Here’s a <a href="prover_1_glm_transcript.html">transcript of GLM-5.3 Flash solving the above problem</a>. GLM-5.3 Flash struggles with the initial search queries and develops a proof directly, while still using Mathlib lemmas and tactics and later returning to Loogle to check a lemma’s signature. The search tool is a natural place to improve this agent. We will return to that point later.</p>
+<h2 id="benchmarks">Benchmarks</h2>
+<p>I benchmarked two classes of models: models that can be run locally on consumer hardware (Gemma 4, Qwen 3.5+) and models costing less than $1 per million output tokens at the time of writing. I excluded frontier models for two reasons: first, it has become very difficult to find problems they cannot solve. Second, even if I found such problems, the cost of running such a benchmark would be prohibitive.</p>
+<p>The set of problems solvable by Gemma 4 models and Qwen 3.5+ models is much smaller than the class of problems solvable by models such as Deepseek V4 Flash or GPT 5.6 Luna. For this reason, the two model families are benchmarked on two separate datasets.</p>
+<p>The benchmark for small models contains undergraduate mathematics problems, such as the problem above. The benchmark for the models costing less than $1 per million output tokens contains a diverse set of problems, most of which are related to program verification. For example, the problem <code>filesystem-tree-size-mapping</code> asks for a proof that renaming files in an idealized file system does not change the total size of all files:</p>
+<pre class="lean"><code>import Mathlib
+
+namespace FormalizerProblem
+
+inductive Node (Name : Type) where
+  | file (name : Name) (bytes : Nat)
+  | directory (name : Name) (children : List (Node Name))
+
+def rename (mapping : Name → NewName) : Node Name → Node NewName
+  | .file name bytes =&gt;
+      .file (mapping name) bytes
+  | .directory name children =&gt;
+      .directory (mapping name) (children.map (rename mapping))
+
+def bytes : Node Name → Nat
+  | .file _ amount =&gt;
+      amount
+  | .directory _ children =&gt;
+      (children.map bytes).sum
+
+def Target : Prop :=
+  ∀ (Name NewName FinalName : Type)
+    (first : Name → NewName)
+    (second : NewName → FinalName)
+    node,
+    bytes (rename first node) = bytes node ∧
+    rename second (rename first node) =
+      rename (second ∘ first) node ∧
+    rename id node = node
+
+end FormalizerProblem</code></pre>
+<p>Both benchmarks were created with the help of GPT 5.6 Sol. While the undergraduate mathematics benchmark was grown from a seed of 14 problems I hand-curated to 60 problems total, the harder benchmark around program verification was created as follows: I asked GPT 5.6 Sol to generate 50 problems from diverse domains, such that Deepseek V4 Flash would fail on at least 20 of these problems. Eventually, it found 50 problems, of which Deepseek V4 Flash failed to solve 21 on the first pass. (Pass@4 is substantially higher though, see below.) Therefore, the benchmark is calibrated around Deepseek V4 Flash and it should be taken with a grain of salt, as this may bias it for or against other models as well.</p>
+<p>Here are the benchmark results:</p>
+<p>Each model received four independent agent episodes per problem. An episode can contain multiple proof attempts and Lean checks. A verified episode ends with a final submission accepted by the trusted checker. Raw pass@1 is the fraction of all selected episodes that were verified. Pass@4 is the fraction of problems solved at least once in four episodes. Solved 4/4 counts problems solved in every episode. Adjusted pass@1 excludes only final outcomes classified as infrastructure failures.</p>
+<h3 id="undergraduate-mathematics-60-problems">Undergraduate mathematics: 60 problems</h3>
+<p>The first benchmark is <code>baseline-eval-v2</code>, with 60 problems and 240 selected episodes per model. Two hosted models were also evaluated on this set, providing a direct comparison with the local models.</p>
+<div class="table-scroll" role="region" aria-label="Benchmark table" tabindex="0">
+<table>
+<colgroup>
+<col style="width: 13%" />
+<col style="width: 17%" />
+<col style="width: 17%" />
+<col style="width: 17%" />
+<col style="width: 17%" />
+<col style="width: 17%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model / configuration</th>
+<th style="text-align: right;">Verified</th>
+<th style="text-align: right;">Raw pass@1</th>
+<th style="text-align: right;">Solved at least once, pass@4</th>
+<th style="text-align: right;">Solved 4/4</th>
+<th style="text-align: right;">Recorded cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deepseek V4 Flash, Deepseek, high</td>
+<td style="text-align: right;">233/240</td>
+<td style="text-align: right;"><strong>97.1%</strong></td>
+<td style="text-align: right;"><strong>60/60 (100%)</strong></td>
+<td style="text-align: right;">54/60</td>
+<td style="text-align: right;">$2.2929</td>
+</tr>
+<tr>
+<td>GLM-5.3 Flash, Z.ai, high</td>
+<td style="text-align: right;">232/240</td>
+<td style="text-align: right;"><strong>96.7%</strong></td>
+<td style="text-align: right;"><strong>60/60 (100%)</strong></td>
+<td style="text-align: right;">56/60</td>
+<td style="text-align: right;">$0.4714</td>
+</tr>
+<tr>
+<td>Local Qwen 3.5 9B, Q4 + MTP, medium</td>
+<td style="text-align: right;">135/240</td>
+<td style="text-align: right;"><strong>56.3%</strong></td>
+<td style="text-align: right;"><strong>46/60 (76.7%)</strong></td>
+<td style="text-align: right;">21/60</td>
+<td style="text-align: right;">Unrecorded</td>
+</tr>
+<tr>
+<td>Local Gemma 4 26B-A4B IT, Q4, no MTP</td>
+<td style="text-align: right;">83/240</td>
+<td style="text-align: right;"><strong>34.6%</strong></td>
+<td style="text-align: right;"><strong>36/60 (60%)</strong></td>
+<td style="text-align: right;">5/60</td>
+<td style="text-align: right;">Unrecorded</td>
+</tr>
+<tr>
+<td>Local Qwen 3.5 4B, Q4 + MTP, medium</td>
+<td style="text-align: right;">83/240</td>
+<td style="text-align: right;"><strong>34.6%</strong></td>
+<td style="text-align: right;"><strong>30/60 (50%)</strong></td>
+<td style="text-align: right;">9/60</td>
+<td style="text-align: right;">Unrecorded</td>
+</tr>
+<tr>
+<td>Local Gemma 4 12B IT QAT, Q4 + MTP</td>
+<td style="text-align: right;">22/240</td>
+<td style="text-align: right;"><strong>9.2%</strong></td>
+<td style="text-align: right;"><strong>15/60 (25%)</strong></td>
+<td style="text-align: right;">0/60</td>
+<td style="text-align: right;">Unrecorded</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The local runs used four-bit quantized models. All except Gemma 4 26B-A4B used multi-token prediction (MTP). Their hardware and electricity costs were not recorded; “Unrecorded” does not mean zero cost.</p>
+<p>The corresponding recorded token totals are:</p>
+<div class="table-scroll" role="region" aria-label="Benchmark table" tabindex="0">
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 26%" />
+<col style="width: 26%" />
+<col style="width: 26%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model / configuration</th>
+<th style="text-align: right;">Total input tokens</th>
+<th style="text-align: right;">Cached input (reads)</th>
+<th style="text-align: right;">Total output tokens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deepseek V4 Flash, Deepseek, high</td>
+<td style="text-align: right;">22,416,952</td>
+<td style="text-align: right;">21,158,912</td>
+<td style="text-align: right;">1,094,363</td>
+</tr>
+<tr>
+<td>GLM-5.3 Flash, Z.ai, high</td>
+<td style="text-align: right;">9,177,384</td>
+<td style="text-align: right;">7,683,584</td>
+<td style="text-align: right;">976,528</td>
+</tr>
+<tr>
+<td>Local Qwen 3.5 9B, Q4 + MTP, medium</td>
+<td style="text-align: right;">148,180,531</td>
+<td style="text-align: right;">145,648,262</td>
+<td style="text-align: right;">2,858,603</td>
+</tr>
+<tr>
+<td>Local Gemma 4 26B-A4B IT, Q4, no MTP</td>
+<td style="text-align: right;">54,712,111</td>
+<td style="text-align: right;">51,640,624</td>
+<td style="text-align: right;">5,225,813</td>
+</tr>
+<tr>
+<td>Local Qwen 3.5 4B, Q4 + MTP, medium</td>
+<td style="text-align: right;">224,610,299</td>
+<td style="text-align: right;">221,203,590</td>
+<td style="text-align: right;">3,459,623</td>
+</tr>
+<tr>
+<td>Local Gemma 4 12B IT QAT, Q4 + MTP</td>
+<td style="text-align: right;">44,630,956</td>
+<td style="text-align: right;">42,524,665</td>
+<td style="text-align: right;">5,796,558</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h3 id="program-verification-and-other-domains-50-problems">Program verification and other domains: 50 problems</h3>
+<p>The second benchmark is <code>formalizer-eval-v1</code>, with 50 problems and 200 selected episodes per model. All four configurations used high reasoning effort.</p>
+<div class="table-scroll" role="region" aria-label="Benchmark table" tabindex="0">
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model / configuration</th>
+<th style="text-align: right;">Verified</th>
+<th style="text-align: right;">Raw pass@1</th>
+<th style="text-align: right;">Infra-invalid</th>
+<th style="text-align: right;">Adjusted pass@1</th>
+<th style="text-align: right;">Observed pass@4</th>
+<th style="text-align: right;">Recorded cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPT-5.6 Luna, OpenAI Flex, high</td>
+<td style="text-align: right;">192/200</td>
+<td style="text-align: right;"><strong>96.0%</strong></td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;"><strong>96.0%</strong></td>
+<td style="text-align: right;"><strong>50/50 (100%)</strong></td>
+<td style="text-align: right;">$2.8723</td>
+</tr>
+<tr>
+<td>Muse Spark 1.2 Contributor, Meta, high</td>
+<td style="text-align: right;">163/200</td>
+<td style="text-align: right;"><strong>81.5%</strong></td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;"><strong>81.9%</strong></td>
+<td style="text-align: right;"><strong>47/50 (94%)</strong></td>
+<td style="text-align: right;">$4.5516</td>
+</tr>
+<tr>
+<td>Deepseek V4 Flash 0731, Deepseek, high</td>
+<td style="text-align: right;">125/200</td>
+<td style="text-align: right;"><strong>62.5%</strong></td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;"><strong>63.5%</strong></td>
+<td style="text-align: right;"><strong>43/50 (86%)</strong></td>
+<td style="text-align: right;">$6.6811</td>
+</tr>
+<tr>
+<td>GLM-5.3 Flash, Z.ai, high</td>
+<td style="text-align: right;">77/200</td>
+<td style="text-align: right;"><strong>38.5%</strong></td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;"><strong>38.5%</strong></td>
+<td style="text-align: right;"><strong>29/50 (58%)</strong></td>
+<td style="text-align: right;">$1.1174</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The corresponding recorded token totals are:</p>
+<div class="table-scroll" role="region" aria-label="Benchmark table" tabindex="0">
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 26%" />
+<col style="width: 26%" />
+<col style="width: 26%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model / configuration</th>
+<th style="text-align: right;">Total input tokens</th>
+<th style="text-align: right;">Cached input (reads)</th>
+<th style="text-align: right;">Total output tokens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPT-5.6 Luna, OpenAI Flex, high</td>
+<td style="text-align: right;">54,070,666</td>
+<td style="text-align: right;">49,114,525</td>
+<td style="text-align: right;">2,937,640</td>
+</tr>
+<tr>
+<td>Muse Spark 1.2 Contributor, Meta, high</td>
+<td style="text-align: right;">111,669,777</td>
+<td style="text-align: right;">84,453,633</td>
+<td style="text-align: right;">8,305,338</td>
+</tr>
+<tr>
+<td>Deepseek V4 Flash 0731, Deepseek, high</td>
+<td style="text-align: right;">55,658,861</td>
+<td style="text-align: right;">53,565,696</td>
+<td style="text-align: right;">6,132,089</td>
+</tr>
+<tr>
+<td>GLM-5.3 Flash, Z.ai, high</td>
+<td style="text-align: right;">9,132,767</td>
+<td style="text-align: right;">6,982,976</td>
+<td style="text-align: right;">3,414,202</td>
+</tr>
+</tbody>
+</table>
+</div>
+<h3 id="flex-and-contributor-pricing">Flex and Contributor pricing</h3>
+<p>The Luna and Muse Spark costs use discounted serving tiers. For comparison, the same recorded usage can be repriced at standard rates:</p>
+<div class="table-scroll" role="region" aria-label="Benchmark table" tabindex="0">
+<table>
+<colgroup>
+<col style="width: 27%" />
+<col style="width: 36%" />
+<col style="width: 36%" />
+</colgroup>
+<thead>
+<tr>
+<th>Model</th>
+<th style="text-align: right;">Recorded discounted cost</th>
+<th style="text-align: right;">Estimated cost at standard pricing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPT-5.6 Luna</td>
+<td style="text-align: right;">$2.8723 (Flex)</td>
+<td style="text-align: right;">$5.7447</td>
+</tr>
+<tr>
+<td>Muse Spark 1.2</td>
+<td style="text-align: right;">$4.5516 (Contributor)</td>
+<td style="text-align: right;">$81.9859</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Luna Flex is half the price of standard Luna processing. Doubling the unrounded recorded Flex cost gives <strong>$5.7447</strong> for the same billed usage at standard rates, preserving its cache-write and context-length charges.</p>
+<p>Muse Spark 1.2 Contributor charges $0.10 per million uncached input tokens, $0.002 per million cached input tokens, and $0.20 per million output tokens. Standard Muse Spark 1.2 charges $1.25, $0.15, and $4.25 respectively.</p>
+    </article>
+  </main>
+</body>
+</html>
